@@ -11,7 +11,7 @@ module.exports = function(srcPath){
     '_bankChunks', '_bankInt', '_bankPadR', '_bankPadL', '_bankCode', '_bankKids', '_bankDebtGroups', '_bankCarried', '_bankDebtorsTexts',
     '_bankKidsFromRows', '_bankDebtorsCalc', '_bankEntryCalc', '_bankSuspectDebts', '_bankHoldFilter', '_invR2', '_prevYM', '_invBankView', '_invVerifyDiff',
     '_invCellErr', '_invPrecheckBlock', '_invPrecheckItems', '_yearlyDepartedIdx', '_isYearlyDeparted', '_invPayByName',
-    '_kidLoose', '_kidIdName', '_kidSurname', '_kidLinkMap', '_kidRekey'].map(fn);
-  const names = ['_bankKidsFromRows', '_bankDebtorsCalc', '_bankEntryCalc', '_bankSuspectDebts', '_bankHoldFilter', '_bankDebtorsTexts', '_invBankView', '_invVerifyDiff', '_invPrecheckItems', '_invPayByName', '_dopAnKid', 'MONTHS_CAL', '_kidLinkMap', '_kidRekey', '_kidLoose'];
+    '_kidLoose', '_kidIdName', '_kidSurname', '_kidLinkMap', '_kidRekey'].concat(src.indexOf('\nfunction _cardsFromPayPlan(') >= 0 ? ['_cardsFromPayPlan'] : []).map(fn);
+  const names = ['_bankKidsFromRows', '_bankDebtorsCalc', '_bankEntryCalc', '_bankSuspectDebts', '_bankHoldFilter', '_bankDebtorsTexts', '_invBankView', '_invVerifyDiff', '_invPrecheckItems', '_invPayByName', '_dopAnKid', 'MONTHS_CAL', '_kidLinkMap', '_kidRekey', '_kidLoose'].concat(src.indexOf('\nfunction _cardsFromPayPlan(') >= 0 ? ['_cardsFromPayPlan'] : []);
   return new Function('Logger', V.concat(F).join('\n') + '\nreturn {' + names.join(',') + '};')({log(){}});
 };

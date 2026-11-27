@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.609
+// m.kids CRM — Google Apps Script v7.610
+// v7.610: createCardsFromPayment — картки для рядків Payment без картки (лише «Клієнти», Payment не чіпає); щоденна звірка експортів (05:00 прогін без запису, 09:00 — CFO в Telegram лише розбіжності й паузи: знижки відсутності, допи → Payment/Salary, предметники → Salary); експорт знижок не пише в рік, відмінний від файлів (грудень → січень 2027 — інакше лягло б у січень 2026), колонка «Бюджет навч» — за розкладкою локації (7 колонок)
 // v7.609: знято паузу експорту знижок відпустки/лікарняного для Круглої (VAC_EXPORT_PAUSED порожній) — нічний прогін, кнопка й звірка знову пишуть у Payment
 // v7.608: знижки відсутності, записані вручну доданком у наступний місяць (addLocPaymentStudyDiscount, тег «[знижка відсутності X → Y]» у журналі грошових правок), експорт знижок більше не чіпає ні в X, ні в Y — без подвоєння (Кругла, листопад → грудень)
 // v7.607: зв'язок картка ↔ рядок Payment не на точному збігу імені (_kidLinkMap: ПІБ → ID картки → схоже написання, лише однозначна пара) — рахунки, PDF, звірка перед розсилкою, групи «Банк»; рядки Payment з бюджетом без картки — у перевірці рахунків (Пуща, «Кіщенко Меланія» ↔ «Кіщенко Міланія»)
@@ -9920,7 +9921,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.609', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.610', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -10068,6 +10069,7 @@ function doGet(e) {
     else if (action === 'getPredmetnyky')              result = getPredmetnyky(Number(e.parameter && e.parameter.actorId || 0), Number(e.parameter && e.parameter.year || 0), Number(e.parameter && e.parameter.month || 0)); // v7.80: місячний зріз
     else if (action === 'getInvoiceListData')          result = getInvoiceListData(e.parameter || {});
     else if (action === 'getInvoicePrecheckPending')   result = getInvoicePrecheckPending(e.parameter || {});   // v7.604 списки «на перевірку CFO»
+    else if (action === 'getAuditExports')             result = getAuditExports(e.parameter || {});   // v7.610 звірка експортів (лише читання)
     else if (action === 'getInvoicePrecheck')          result = getInvoicePrecheck(e.parameter || {});   // v7.530 перевірка перед розсилкою (читання)
     else if (action === 'diagSpreadsheet')            result = diagSpreadsheet(e.parameter || {});      // v7.362 перевірка файлу нової локації (лише читання)
     else if (action === 'getPaymentRowsWithoutCards') result = getPaymentRowsWithoutCards(e.parameter || {});   // v7.357 рядки Payment без картки
@@ -10256,6 +10258,8 @@ function doPost(e) {
     else if (body.action === 'saveClassPromotion')        result = saveClassPromotion(body);    // v7.420 підтвердження переведення класів (директор/офіс)
     else if (body.action === 'applyClassPromotions')      result = applyClassPromotions(body);  // v7.420 застосувати з 1 вересня (офіс; dryRun:true — перегляд)
     else if (body.action === 'pilot2027Payment')          result = pilot2027Payment(body);      // v7.419 пілот Payment 2027 (CFO; нові вкладки, старі не чіпає)
+    else if (body.action === 'createCardsFromPayment')    result = createCardsFromPayment(body);   // v7.610 картки для рядків Payment без картки (CFO, dryRun за замовч.)
+    else if (body.action === 'auditExportsSetup')         result = auditExportsSetup(body);     // v7.610 тригери 05:00 / 09:00 (CFO)
     else if (body.action === 'promoNightlySetup')         result = promoNightlySetup(body);     // v7.414 тригер 08:30 (CFO)
     else if (body.action === 'salaryReconMoveMonth')      result = salaryReconMoveMonth(body);  // v7.374 перенос відомості в інший місяць (CFO, dryRun)
     else if (body.action === 'createCardFromPayment')     result = createCardFromPayment(body || {});   // v7.357 картка з рядка Payment (ПІБ як у Payment)
@@ -15117,8 +15121,210 @@ function weeklyOwnerReport(e){ var _t = Date.now(); try { return _weeklyOwnerRep
 function invFlushPaidQueue(e){ var _t = Date.now(); try { return _invFlushPaidQueue__impl(e); } finally { _trigAcc('invFlushPaidQueue', _t); } }
 function _vacExportGuardBatch(e){ var _t = Date.now(); try { return __vacExportGuardBatch__impl(e); } finally { _trigAcc('_vacExportGuardBatch', _t); } }
 function onMirrorOpen(e){ var _t = Date.now(); try { return _onMirrorOpen__impl(e); } finally { _trigAcc('onMirrorOpen', _t); } }
+function auditExportsNightly(e){ var _t = Date.now(); try { return _auditExpStart(e); } finally { _trigAcc('auditExportsNightly', _t); } }   // v7.610
+function _auditExpBatch(e){ var _t = Date.now(); try { return _auditExpRun(e); } finally { _trigAcc('_auditExpBatch', _t); } }
+function auditExportsReport(e){ var _t = Date.now(); try { return _auditExpReport(e); } finally { _trigAcc('auditExportsReport', _t); } }
 function nightlyExportGuarantee(e){ var _t = Date.now(); try { return _nightlyExportGuarantee__impl(e); } finally { _trigAcc('nightlyExportGuarantee', _t); } }
 function opex27OnEdit(e){ var _t = Date.now(); try { return _opex27OnEdit__impl(e); } finally { _trigAcc('opex27OnEdit', _t); } }
+
+
+// ═══ v7.610: ЩОДЕННА ЗВІРКА ЕКСПОРТІВ (ЛИШЕ ЧИТАННЯ) ═══════════════════════════════════════════════════
+// Привід: пауза Круглої (VAC_EXPORT_PAUSED, 02.11–27.11.2026) мовчки тримала знижки поза Payment майже місяць.
+// 05:00 — прогін без запису по садках і школах (Управління — ні) пачками до ~4,5 хв, продовження тригером через 1 хв:
+//   знижки відсутності (reconcileVacationDiscounts, поточний і наступний місяць), допи → «Бюджет доп» (exportAttendanceToPayments),
+//   допи → Salary (exportToSalaryExtras), предметники → Salary (exportPredmetnykyToSalary) — для відміток минулого й поточного місяця.
+//   Розбіжність = експорт ЗАПИСАВ БИ щось (система ≠ Payment/Salary) або не знайшов рядок.
+// 09:00 — у особистий чат CFO (INVOICE_CFO_CHAT_ID) список розбіжностей і пауз; усе збігається — нічого не надсилає.
+//   Нічого не пише ні в Payment, ні в Salary, ні в аркуші — стан лише у властивостях скрипта.
+var AUDIT_EXP_KEY = 'AUDIT_EXP_STATE', AUDIT_EXP_START_HOUR = 5, AUDIT_EXP_REPORT_HOUR = 9, AUDIT_EXP_BUDGET_MS = 270000;
+function _auditExpLocs(){
+  var out = [];
+  (getLocations().data || []).forEach(function(l){ var t = String(l.typ || '').trim(), n = String(l.loc || '').trim();
+    if (n && (t === 'Садочок' || t === 'Школа') && out.indexOf(n) < 0) out.push(n); });
+  return out;
+}
+// Місяці перевірки на дату: знижки — цілі (поточний, наступний); відмітки — джерела (минулий, поточний). Лише рік файлів, не закриті.
+function _auditExpMonths(y, m, base, closedFn){
+  var nm = _nextMonth(m, y), pm = _prevYM(y, m), ok = function(x){ return x.y === base && !(closedFn && closedFn(x.y, x.m)); };
+  var tgt = [{y:y, m:m}, {y:nm.year, m:nm.month}].filter(ok);
+  var src = [{y:pm.y, m:pm.m}, {y:y, m:m}].filter(function(x){ var t = _nextMonth(x.m, x.y); return ok(x) && ok({y:t.year, m:t.month}); });
+  return {disc:tgt, src:src};
+}
+// Сирі відповіді прогонів → список коротких рядків-розбіжностей (чиста функція, тест).
+function _auditEvalLoc(raw){
+  var out = [], mn = function(m){ return String(MONTHS_CAL[(Number(m) || 1) - 1] || m).toLowerCase(); };
+  (raw.disc || []).forEach(function(d){
+    var r = d.res || {}; if (!r.ok){ out.push('знижки ' + mn(d.m) + ': помилка — ' + String(r.error || '?').slice(0, 120)); return; }
+    var s = r.summary || {}, n = (s.toApply || 0) + (s.toAdjust || 0) + (s.toRestore || 0) + (s.notFound || 0);
+    if (n) out.push('знижки ' + mn(d.m) + ': система ' + (s.expectedTotal || 0) + ' ≠ Payment ' + (s.journalTotal || 0) + ' (дітей: ' + n + ' — ' +
+      (r.rows || []).filter(function(x){ return x.action !== 'ok'; }).slice(0, 6).map(function(x){ return x.name + ' ' + x.expected + '/' + x.journal; }).join(', ') + ')');
+  });
+  [['dop', 'допи → Payment'], ['sal', 'допи → Salary'], ['pred', 'предметники → Salary']].forEach(function(k){
+    (raw[k[0]] || []).forEach(function(d){
+      var r = d.res || {}, tag = k[1] + ' (відмітки ' + mn(d.m) + ')';
+      if (r.queued){ out.push(tag + ': експорт у черзі — не перевірено'); return; }
+      if (!r.ok){ if (/NO_MARKS|NO_LESSONS|немає відміток|немає уроків/i.test(String(r.code || '') + String(r.error || ''))) return;
+                  out.push(tag + ': помилка — ' + String(r.error || '?').slice(0, 120)); return; }
+      var w = (Number(r.cellsWritten) || 0) + (Number(r.formulaCellsConverted) || 0) + (Number(r.rowsAdded) || 0), nf = (r.notFound || []).length;
+      if (!w && !nf) return;
+      var who = (r.details || []).filter(function(x){ var a = x.currentBefore != null ? x.currentBefore : x.oldValue, b = x.newCell != null ? x.newCell : x.newValue; return a != null && b != null && Number(a) !== Number(b); })
+        .slice(0, 6).map(function(x){ return (x.child || x.activity || x.subject) + ' ' + (x.currentBefore != null ? x.currentBefore : x.oldValue) + '→' + (x.newCell != null ? x.newCell : x.newValue); });
+      out.push(tag + ': ' + (w ? 'не збігається клітинок — ' + w + (who.length ? ' (' + who.join(', ') + ')' : '') : '') + (nf ? (w ? '; ' : '') + 'немає рядка: ' + (r.notFound || []).slice(0, 6).map(function(x){ return typeof x === 'string' ? x : (x.child || x.name || x.activity || JSON.stringify(x)); }).join(', ') : ''));
+    });
+  });
+  return out;
+}
+// Активні паузи / вимкнені перемикачі, що зупиняють запис (чиста частина — props і триггери передаються).
+function _auditExpPausesFrom(paused, props, handlers){
+  var out = [];
+  Object.keys(paused || {}).forEach(function(l){ if (paused[l]) out.push('⏸ знижки відсутності: експорт на паузі — ' + l); });
+  if (String((props || {}).PAY_AUTO || '') !== '1') out.push('⏸ PAY_AUTO вимкнено — нові договори / розірвання / переходи не пишуться в Payment');
+  if (String((props || {}).INV_AUTO_MATCH || '') === 'off') out.push('⏸ автозвірка рахунків бота вимкнена (INV_AUTO_MATCH=off)');
+  [['nightlyVacExportGuarantee', 'нічна гарантія знижок відсутності'], ['nightlyExportGuarantee', 'нічна гарантія експорту допів'], ['promoNightly', 'нічний прогін акцій і знижок']]
+    .forEach(function(t){ if ((handlers || []).indexOf(t[0]) < 0) out.push('⏸ немає тригера: ' + t[1] + ' (' + t[0] + ')'); });
+  return out;
+}
+function _auditExpPauses(){
+  var pr = PropertiesService.getScriptProperties(), h = [];
+  try { ScriptApp.getProjectTriggers().forEach(function(t){ h.push(t.getHandlerFunction()); }); } catch(_t){ h = null; }
+  return _auditExpPausesFrom(VAC_EXPORT_PAUSED, {PAY_AUTO:pr.getProperty('PAY_AUTO'), INV_AUTO_MATCH:pr.getProperty('INV_AUTO_MATCH')},
+    h || ['nightlyVacExportGuarantee', 'nightlyExportGuarantee', 'promoNightly']);
+}
+// Одна локація: прогони без запису → {loc, issues}
+function _auditExpLoc(loc, now){
+  now = now || new Date();
+  var y = Number(Utilities.formatDate(now, 'Europe/Kiev', 'yyyy')), m = Number(Utilities.formatDate(now, 'Europe/Kiev', 'M'));
+  var M = _auditExpMonths(y, m, PAY_BASE_YEAR, _isMonthClosed), raw = {disc:[], dop:[], sal:[], pred:[]}, sub = !!_subLocOf(loc);
+  var call = function(fn, p){ try { return fn(p); } catch(e){ return {ok:false, error:String(e && e.message || e)}; } };
+  M.disc.forEach(function(t){ raw.disc.push({m:t.m, res:call(reconcileVacationDiscounts, {loc:loc, month:t.m, year:t.y, dryRun:true})}); });
+  M.src.forEach(function(t){
+    if (!sub) raw.dop.push({m:t.m, res:call(exportAttendanceToPayments, {loc:loc, month:t.m, year:t.y, dryRun:true})});
+    if (!sub) raw.sal.push({m:t.m, res:call(exportToSalaryExtras, {loc:loc, month:t.m, year:t.y, dryRun:true})});
+    raw.pred.push({m:t.m, res:call(exportPredmetnykyToSalary, {loc:loc, month:t.m, year:t.y, dryRun:true})});
+  });
+  return {loc:loc, issues:_auditEvalLoc(raw)};
+}
+function _auditExpDay(){ return Utilities.formatDate(new Date(), 'Europe/Kiev', 'yyyy-MM-dd'); }
+function _auditExpSave(st){ PropertiesService.getScriptProperties().setProperty(AUDIT_EXP_KEY, JSON.stringify(st)); }
+function _auditExpLoad(){ try { return JSON.parse(PropertiesService.getScriptProperties().getProperty(AUDIT_EXP_KEY) || 'null'); } catch(_e){ return null; } }
+function _auditExpDropCont(){ ScriptApp.getProjectTriggers().forEach(function(t){ if (t.getHandlerFunction() === '_auditExpBatch') ScriptApp.deleteTrigger(t); }); }
+function _auditExpStart(){
+  _auditExpDropCont();
+  _auditExpSave({day:_auditExpDay(), locs:_auditExpLocs(), pos:0, res:[], started:new Date().toISOString()});
+  return _auditExpRun();
+}
+function _auditExpRun(){
+  var st = _auditExpLoad(); if (!st || st.pos >= st.locs.length) return;
+  var t0 = Date.now();
+  while (st.pos < st.locs.length && Date.now() - t0 < AUDIT_EXP_BUDGET_MS){
+    var r = _auditExpLoc(st.locs[st.pos]);
+    if (r.issues.length) st.res.push({loc:r.loc, issues:r.issues.map(function(x){ return String(x).slice(0, 400); })});
+    st.pos++; _auditExpSave(st);
+  }
+  _auditExpDropCont();
+  if (st.pos < st.locs.length) ScriptApp.newTrigger('_auditExpBatch').timeBased().after(60 * 1000).create();
+  else { st.done = new Date().toISOString(); _auditExpSave(st); }
+}
+// Текст звіту (чиста функція): '' — нічого не надсилати.
+function _auditExpText(st, pauses, day){
+  var lines = [];
+  if (!st || st.day !== day) lines.push('⚠️ Нічна звірка не запускалась сьогодні (немає результату за ' + day + ').');
+  else if (st.pos < st.locs.length) lines.push('⚠️ Нічна звірка не завершилась: перевірено ' + st.pos + ' з ' + st.locs.length + ' локацій (далі: ' + st.locs.slice(st.pos).join(', ') + ').');
+  ((st && st.day === day && st.res) || []).forEach(function(r){ lines.push('<b>' + _htmlEsc(r.loc) + '</b>'); r.issues.forEach(function(i){ lines.push('• ' + _htmlEsc(i)); }); });
+  (pauses || []).forEach(function(p){ lines.push(_htmlEsc(p)); });
+  if (!lines.length) return '';
+  return '🔎 <b>Звірка експортів ' + day.split('-').reverse().join('.') + '</b> (система ≠ Payment / Salary, лише читання)\n' + lines.join('\n');
+}
+function _auditExpReport(){
+  var text = _auditExpText(_auditExpLoad(), _auditExpPauses(), _auditExpDay());
+  if (!text) return {ok:true, sent:false};
+  var to = _invProp('INVOICE_CFO_CHAT_ID'); if (!to){ Logger.log('[audit] немає INVOICE_CFO_CHAT_ID'); return {ok:false, error:'немає INVOICE_CFO_CHAT_ID'}; }
+  var parts = [], cur = '';
+  text.split('\n').forEach(function(l){ if ((cur + '\n' + l).length > 3800){ parts.push(cur); cur = l; } else cur = cur ? cur + '\n' + l : l; });
+  if (cur) parts.push(cur);
+  parts.forEach(function(t){ _invSend(to, t); });
+  return {ok:true, sent:true, parts:parts.length};
+}
+// POST {action:'auditExportsSetup', actorId} — тригери 05:00 (прогін) і 09:00 (звіт), Europe/Kiev (CFO).
+function auditExportsSetup(body){
+  var a = _promoActor(body || {}); if (!(a && _roleKey(a.role) === 'cfo')) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  ScriptApp.getProjectTriggers().forEach(function(t){ var h = t.getHandlerFunction(); if (h === 'auditExportsNightly' || h === 'auditExportsReport' || h === '_auditExpBatch') ScriptApp.deleteTrigger(t); });
+  ScriptApp.newTrigger('auditExportsNightly').timeBased().everyDays(1).atHour(AUDIT_EXP_START_HOUR).nearMinute(0).inTimezone('Europe/Kiev').create();
+  ScriptApp.newTrigger('auditExportsReport').timeBased().everyDays(1).atHour(AUDIT_EXP_REPORT_HOUR).nearMinute(0).inTimezone('Europe/Kiev').create();
+  return {ok:true, run:AUDIT_EXP_START_HOUR + ':00', report:AUDIT_EXP_REPORT_HOUR + ':00 Europe/Kiev', to:_invProp('INVOICE_CFO_CHAT_ID') ? 'особистий чат CFO' : 'НЕМАЄ INVOICE_CFO_CHAT_ID'};
+}
+// GET getAuditExports&loc= — та сама звірка однієї локації зараз (без запису, без надсилання); без loc — стан нічного прогону і паузи.
+function getAuditExports(p){
+  try {
+    p = p || {}; var loc = String(p.loc || '').trim();
+    if (loc) return {ok:true, loc:loc, issues:_auditExpLoc(loc).issues};
+    var st = _auditExpLoad();
+    return {ok:true, state:st, pauses:_auditExpPauses(), preview:_auditExpText(st, _auditExpPauses(), _auditExpDay())};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
+
+// ═══ v7.610: КАРТКИ ДЛЯ РЯДКІВ PAYMENT БЕЗ КАРТКИ (Нац.Гвардії, 27.11.2026) ═════════════════════════════
+// POST {action:'createCardsFromPayment', loc, months?:[11,12], year?, dryRun (за замовч. true), actorId} — лише CFO.
+//   Рядок Payment без картки (зв'язок — _kidLinkMap, як у v7.607: схоже написання = картка вже є, дубль не створюємо) і з
+//   «Бюджет навч» або «Бюджет доп» ≠ 0 хоч в одному з months → картка: ПІБ як у Payment, група — блок рядка (назва як у ростері
+//   «Оплат», _groupCanon), локація, статус active, ID = c_<ПІБ Payment>_<локація> (зв'язок з рядком). Більше нічого не заповнює.
+//   Payment НЕ чіпає (ні рядків, ні бюджетів, ні агрегату) — пише лише рядки аркуша «Клієнти».
+//   Без бюджету / вибулі / «(без імені)» — не створюються, повертаються списком.
+function _cardsFromPayPlan(rows, cards, months, canon){
+  var H = ["Ім'я дитини", 'Група', 'Вибув'], out = {create:[], noBudget:[], departed:[], linked:[]};
+  var names = rows.map(function(r){ return String(r.name || '').trim(); }).filter(Boolean);
+  var lk = _kidLinkMap(cards, names), seen = {};
+  rows.forEach(function(r){
+    var n = String(r.name || '').trim(); if (!n || seen[n]) return; seen[n] = 1;
+    if (lk[n]){ if (lk[n].how !== 'exact') out.linked.push({name:n, card:lk[n].card, how:lk[n].how}); return; }
+    if (/^\(без імені/i.test(n) || r.departed){ out.departed.push({name:n, group:r.group}); return; }
+    var bud = months.some(function(m){ return (Number((r.bud[m] || {}).navch) || 0) !== 0 || (Number((r.bud[m] || {}).dop) || 0) !== 0; });
+    var item = {name:n, group:canon(r.group), groupInPayment:r.group, bud:r.bud};
+    (bud ? out.create : out.noBudget).push(item);
+  });
+  return out;
+}
+function createCardsFromPayment(body){
+  body = body || {};
+  try {
+    var a = _promoActor(body); if (!_promoIsCfo(a)) return PROMO_DENIED;
+    var loc = trim(body.loc || ''), dryRun = (body.dryRun !== false), year = Number(body.year) || PAY_BASE_YEAR;
+    var months = (Array.isArray(body.months) && body.months.length ? body.months : [11, 12]).map(Number);
+    if (!loc) return {ok:false, error:'потрібна loc'};
+    var ys = getCRMSpreadsheet().getSheetByName(SHEET_YEARLY), yv = ys.getDataRange().getValues(), yh = yv[0].map(String);
+    var iL = yh.indexOf('Локація'), iN = yh.indexOf("Ім'я дитини"), iG = yh.indexOf('Група'), iD = _yearlyDepartedIdx(yh), rows = [];
+    for (var r = 1; r < yv.length; r++){
+      if (String(yv[r][iL]).trim() !== loc) continue;
+      var bud = {}; months.forEach(function(m){ bud[m] = {navch:toNum(yv[r][yh.indexOf(MONTHS_CAL[m - 1] + '-Бюджет-навч')]), dop:toNum(yv[r][yh.indexOf(MONTHS_CAL[m - 1] + '-Бюджет-доп')])}; });
+      rows.push({name:yv[r][iN], group:String(yv[r][iG] || '').trim(), departed:_isYearlyDeparted(yv[r], iD), bud:bud});
+    }
+    var cs = getCRMSpreadsheet().getSheetByName(SHEET_CLIENTS); ensureClientsHeader(cs);
+    var cv = cs.getDataRange().getValues(), ch = cv[0].map(String), cI = ch.indexOf('ID'), cN = ch.indexOf('ПІБ дитини'), cL = ch.indexOf('Локація'), cards = [], ids = {};
+    for (var q = 1; q < cv.length; q++){ var cid = String(cv[q][cI] || '').trim(); if (cid) ids[cid] = 1;
+      if (String(cv[q][cL] || '').trim() === loc) cards.push({name:String(cv[q][cN] || '').trim(), id:cid}); }
+    var plan = _cardsFromPayPlan(rows, cards, months, function(g){ return _groupCanon(loc, g); });
+    // рядок у файлі Payment (лише читання) — для звіту
+    try { var reg = _getLocationPaymentRegistry(loc), ps = SpreadsheetApp.openById(reg.sheetId), sh = ps.getSheetByName(reg.sheetName) || ps.getSheets()[0], pa = sh.getRange(1, 1, sh.getLastRow(), 1).getValues();
+          plan.create.forEach(function(it){ for (var k = 0; k < pa.length; k++) if (String(pa[k][0]).trim() === it.name){ it.row = k + 1; break; } }); } catch(_pr){}
+    plan.create.forEach(function(it){ it.id = _genChildId(it.name, loc); if (ids[it.id]) it.idTaken = true; });
+    var todo = plan.create.filter(function(it){ return !it.idTaken; });
+    var res = {ok:true, dryRun:dryRun, loc:loc, months:months, create:plan.create, noBudget:plan.noBudget, departed:plan.departed.length, linked:plan.linked};
+    if (dryRun || !todo.length) return res;
+    var lock = LockService.getScriptLock(); try { lock.waitLock(30000); } catch(_l){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+    try {
+      var now = new Date(), out = todo.map(function(it){ var row = ch.map(function(){ return ''; });
+        row[cI] = it.id; row[cN] = it.name; row[cL] = loc; row[ch.indexOf('Група')] = it.group; row[ch.indexOf('Статус')] = 'active';
+        if (ch.indexOf('Створено') >= 0) row[ch.indexOf('Створено')] = now; if (ch.indexOf('Оновлено') >= 0) row[ch.indexOf('Оновлено')] = now;
+        return row; });
+      cs.getRange(cs.getLastRow() + 1, 1, out.length, ch.length).setValues(out);
+      SpreadsheetApp.flush();
+      try { _cacheBump('clients'); _cacheBump('fill'); } catch(_c){}
+      res.written = out.length;
+    } finally { try { lock.releaseLock(); } catch(_r){} }
+    return res;
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
 
 // ═══ v7.508 ПЛАН НАБОРУ 2027 — ЛИШЕ ЧИТАННЯ ═══
 //   Аркуш «Scenarios» у кожному файлі _27 (PAY_FILES_BY_YEAR[2027]): A4:M6 — «<лат.> Conservative / Base / Aggressive»,
@@ -29627,6 +29833,10 @@ function exportVacationDiscountToPayments(params){
     if (!month || month < 1 || month > 12) return {ok: false, error: 'month має бути 1-12'};
     var monthName = MONTHS_CAL_UA[month - 1];
     if (!dryRun && _isMonthClosed(year, month)) return _closedMonthError(year, month);   // v7.91
+    // v7.610: файли реєстру — лише PAY_BASE_YEAR. Знижка, що йде в інший рік (грудень → січень 2027), сюди не пишеться:
+    //   колонка січня файлу 2026 — це січень 2026 (нічна гарантія з 01.12 бере «наступний місяць» = січень 2027). Файли 2027 — лише читання.
+    if (year !== PAY_BASE_YEAR) return {ok:true, skippedYear:true, loc:loc, month:month, year:year, targetMonth:monthName, cellsWritten:0, details:[], notFound:[], notFoundDetails:[], routing:[],
+                                        note:'Знижки за ' + month + '/' + year + ' — файл іншого року (' + year + '), експорт у файл ' + PAY_BASE_YEAR + ' не пише'};
     if (!dryRun && _vacExportPaused(loc)) return {ok:false, paused:true, error:'Експорт знижок відпустки для «' + loc + '» зупинено (CFO) — Payment не змінюється'};   // v7.528
     // v7.418: діти НА РЕЄСТРІ (картка «Реєстр знижок з» ≤ місяця) — знижка відпустки йде в реєстр (VAC), їхня клітинка — формула.
     // Решта дітей — СТАРИЙ шлях (число в клітинку через журнал), їхні ручні клітинки на формулу не переводяться.
@@ -29661,9 +29871,10 @@ function exportVacationDiscountToPayments(params){
     var data  = paySh.getDataRange().getValues();
 
     // === 3. Колонка "Бюджет навч" таргет-місяця + НАСТУПНОГО місяця (v6.41) ===
-    var monthStartCol0  = 1 + (month - 1) * 5;
-    var budgetNavchCol1 = monthStartCol0 + 4 + 1;   // 1-based (січень = F = 6)
-    var nextNavchCol1   = budgetNavchCol1 + 5;       // той самий рядок, +1 місяць
+    var _vCpm = reg.colsPerMonth || 5, _vLO = _paymentLayout(_vCpm);   // v7.610: 7 колонок (харчування) — своя розкладка, як у допів
+    var monthStartCol0  = 1 + (month - 1) * _vCpm;
+    var budgetNavchCol1 = monthStartCol0 + _vLO.budNavch + 1;   // 1-based (5 колонок: січень = F = 6)
+    var nextNavchCol1   = budgetNavchCol1 + _vCpm;       // той самий рядок, +1 місяць
     // Захист N+1 можливий лише в межах того ж річного листа (міс. 1-11).
     // Грудень → січень наступного року = інший лист/файл → захист пропускаємо.
     var canProtectNext  = (month <= 11);

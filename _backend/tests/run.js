@@ -1572,6 +1572,49 @@ if (src.indexOf('\nfunction _absMovedParse(') >= 0){
     {uses: /_absMovedParse\(/.test(fn('exportVacationDiscountToPayments')) && /status: 'moved'/.test(fn('exportVacationDiscountToPayments'))}, {uses: true});
 }
 
+// ── v7.610: щоденна звірка експортів + знижки не в чужий рік ──
+if (src.indexOf('\nfunction _auditEvalLoc(') >= 0){
+  const A = new Function(varLine('MONTHS_CAL') + '\n' + ['_nextMonth', '_prevYM', '_htmlEsc', '_auditExpMonths', '_auditEvalLoc', '_auditExpPausesFrom', '_auditExpText'].map(fn).join('\n') +
+    ';return {_auditExpMonths, _auditEvalLoc, _auditExpPausesFrom, _auditExpText};')();
+  const closed = (y, m) => y === 2026 && m <= 9;
+  check('звірка експортів: місяці', '27.11 — знижки за листопад і грудень, відмітки жовтня й листопада; 01.12 — без січня 2027 (інший файл)',
+    {nov: A._auditExpMonths(2026, 11, 2026, closed), dec: A._auditExpMonths(2026, 12, 2026, closed), oct: A._auditExpMonths(2026, 10, 2026, closed).src},
+    {nov: {disc: [{y: 2026, m: 11}, {y: 2026, m: 12}], src: [{y: 2026, m: 10}, {y: 2026, m: 11}]}, dec: {disc: [{y: 2026, m: 12}], src: [{y: 2026, m: 11}]}, oct: [{y: 2026, m: 10}]});
+  const raw = {disc: [{m: 11, res: {ok: true, summary: {toApply: 3, toAdjust: 0, toRestore: 0, notFound: 0, expectedTotal: 25895, journalTotal: 12395}, rows: [{name: 'Яременко Ярослав', expected: 4500, journal: 0, action: 'apply'}, {name: 'Шиш Устим', expected: 4500, journal: 4500, action: 'ok'}]}},
+                      {m: 12, res: {ok: true, summary: {toApply: 0, toAdjust: 0, toRestore: 0, notFound: 0}, rows: []}}],
+               dop: [{m: 11, res: {ok: true, cellsWritten: 1, formulaCellsConverted: 0, notFound: [], details: [{child: 'Магомедов Самір', currentBefore: 1760, newCell: 2160}, {child: 'Інший', currentBefore: 500, newCell: 500}]}}],
+               sal: [{m: 11, res: {ok: true, cellsWritten: 0, notFound: []}}, {m: 10, res: {ok: false, code: 'NO_MARKS', error: 'немає відміток'}}],
+               pred: [{m: 11, res: {ok: true, cellsWritten: 0, rowsAdded: 0}}, {m: 10, res: {queued: true, ok: true}}]};
+  check('звірка експортів: розбіжності', 'лише те, що експорт записав би; «немає відміток» — не розбіжність; черга — позначено',
+    {lines: A._auditEvalLoc(raw)},
+    {lines: ['знижки листопад: система 25895 ≠ Payment 12395 (дітей: 3 — Яременко Ярослав 4500/0)', 'допи → Payment (відмітки листопад): не збігається клітинок — 1 (Магомедов Самір 1760→2160)',
+             'предметники → Salary (відмітки жовтень): експорт у черзі — не перевірено']});
+  check('звірка експортів: паузи', 'пауза знижок, вимкнений PAY_AUTO, відсутній нічний тригер — у звіті; усе ввімкнено — порожньо',
+    {on: A._auditExpPausesFrom({'Кругла': true}, {PAY_AUTO: '0'}, ['nightlyExportGuarantee', 'promoNightly']).length,
+     off: A._auditExpPausesFrom({}, {PAY_AUTO: '1'}, ['nightlyVacExportGuarantee', 'nightlyExportGuarantee', 'promoNightly'])}, {on: 3, off: []});
+  const ok = {day: '2026-11-28', locs: ['Кругла', 'Пуща'], pos: 2, res: []};
+  check('звірка експортів: Telegram', 'без розбіжностей і пауз — нічого не надсилаємо; з розбіжністю — список; не запускалась — попередження',
+    {empty: A._auditExpText(ok, [], '2026-11-28'), has: /Кругла[\s\S]*Яременко/.test(A._auditExpText({day: '2026-11-28', locs: ['Кругла'], pos: 1, res: [{loc: 'Кругла', issues: ['знижки: Яременко']}]}, [], '2026-11-28')),
+     stale: /не запускалась/.test(A._auditExpText(ok, [], '2026-11-29'))}, {empty: '', has: true, stale: true});
+  check('знижки відсутності: не в чужий рік', 'експорт не пише січень 2027 у файл 2026; колонка — за розкладкою локації (7 колонок)',
+    {year: /year !== PAY_BASE_YEAR\) return \{ok:true, skippedYear:true/.test(fn('exportVacationDiscountToPayments')), cpm: /_paymentLayout\(_vCpm\)/.test(fn('exportVacationDiscountToPayments'))}, {year: true, cpm: true});
+}
+
+// ── v7.610: картки для рядків Payment без картки (Нац.Гвардії) ──
+if (src.indexOf('\nfunction _cardsFromPayPlan(') >= 0){
+  const B = require('./_bankload.js')(SRC);
+  const b = (n, d) => ({11: {navch: n, dop: d}, 12: {navch: 0, dop: 0}});
+  const P = B._cardsFromPayPlan([{name: 'Капоріков Еван 715', group: 'Мандрівники', bud: b(18000, 980)}, {name: 'Савчук Софія 717', group: 'Preschool', bud: b(6750, 0)},
+      {name: 'Єлагін Марк(Леонов)', group: 'Мандрівники', bud: b(18000, 0)}, {name: 'Тихий Без Бюджету', group: 'Пізнайки', bud: b(0, 0)}, {name: '(без імені, р.6)', group: '(без групи)', departed: true, bud: b(0, 0)},
+      {name: 'Існуюча Дитина 12', group: 'Пізнайки', bud: b(18000, 0)}],
+    [{name: 'Єлагін Марк', id: 'c_Єлагін Марк_Нац.Гвардії '}, {name: 'Існуюча Дитина 12', id: 'c_x'}], [11, 12], (g) => g === 'Preschool' ? 'Розумники' : g);
+  check('картки з Payment: кому створюємо', 'лише рядки без картки (схоже написання — картка є) з бюджетом листопада/грудня; група — як у ростері «Оплат»; без бюджету — списком',
+    {create: P.create.map((x) => x.name + ' · ' + x.group), noBudget: P.noBudget.map((x) => x.name), departed: P.departed.length, linked: P.linked.map((x) => x.name + '→' + x.card)},
+    {create: ['Капоріков Еван 715 · Мандрівники', 'Савчук Софія 717 · Розумники'], noBudget: ['Тихий Без Бюджету'], departed: 1, linked: ['Єлагін Марк(Леонов)→Єлагін Марк']});
+  check('картки з Payment: Payment не чіпаємо', 'createCardsFromPayment пише лише «Клієнти» (без addPaymentRow / setLocPaymentBudget / агрегату)',
+    {bad: ['addPaymentRow(', 'setLocPaymentBudget(', '_aggregateOneLoc(', '_autoCreatePaymentForNewCard(', 'saveClient('].filter((f) => fn('createCardsFromPayment').indexOf(f) >= 0)}, {bad: []});
+}
+
 if (!fs.existsSync(path.join(__dirname, '..', '..', 'activities.html'))){
 console.log('\n' + pass + ' пройдено, ' + fail + ' з помилкою — ' + path.basename(SRC));
 process.exit(fail ? 1 : 0);
